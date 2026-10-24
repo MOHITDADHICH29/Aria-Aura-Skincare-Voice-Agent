@@ -22,6 +22,43 @@ interface IWindow extends Window {
   webkitSpeechRecognition?: any;
 }
 
+/**
+ * Echo filter: Checks if customer speech is a reflection of Aria's last TTS utterance.
+ * Returns true if more than 60% of customer words appear in Aria's last reply.
+ */
+function isEchoOfAria(customerText: string, lastAriaText: string): boolean {
+  if (!customerText || !lastAriaText) return false;
+
+  const tokenize = (str: string) =>
+    str
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length > 0);
+
+  const customerWords = tokenize(customerText);
+  if (customerWords.length === 0) return false;
+
+  const ariaWords = new Set(tokenize(lastAriaText));
+  let matchCount = 0;
+
+  for (const word of customerWords) {
+    if (ariaWords.has(word)) {
+      matchCount++;
+    }
+  }
+
+  const matchRatio = matchCount / customerWords.length;
+  // If > 60% of words were just spoken by Aria, discard as acoustic feedback
+  const isEcho = matchRatio > 0.6;
+  if (isEcho) {
+    console.warn(
+      `[Echo Filter] Discarding TTS acoustic echo (${(matchRatio * 100).toFixed(0)}% match): "${customerText}"`
+    );
+  }
+  return isEcho;
+}
+
 export function useVoiceAgent() {
   const [callState, setCallState] = useState<CallState>("Idle");
   const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
@@ -31,17 +68,27 @@ export function useVoiceAgent() {
   const [isSummarizing, setIsSummarizing] = useState<boolean>(false);
   const [isBrowserSupported, setIsBrowserSupported] = useState<boolean>(true);
 
-  // References to keep callbacks and mutable state fresh
+  // Headphones mode: default OFF (half-duplex). When ON, allows full-duplex voice barge-in.
+  const [headphonesMode, setHeadphonesMode] = useState<boolean>(false);
+
+  // References to prevent race conditions and capture mutable state
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
   const isCallActiveRef = useRef<boolean>(false);
   const callStateRef = useRef<CallState>("Idle");
+  const headphonesModeRef = useRef<boolean>(false);
+  const lastAriaReplyRef = useRef<string>("");
+
+  const isRecognitionRunningRef = useRef<boolean>(false);
+  const isStartingRecognitionRef = useRef<boolean>(false);
+
   const cancelSpeechRef = useRef<(() => void) | null>(null);
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const speechEndTimerRef = useRef<NodeJS.Timeout | null>(null);
   const silencePromptPlayedRef = useRef<boolean>(false);
   const transcriptRef = useRef<TranscriptItem[]>([]);
 
-  // Sync ref with state
+  // Synchronize refs with state
   useEffect(() => {
     callStateRef.current = callState;
   }, [callState]);
@@ -49,6 +96,10 @@ export function useVoiceAgent() {
   useEffect(() => {
     transcriptRef.current = transcript;
   }, [transcript]);
+
+  useEffect(() => {
+    headphonesModeRef.current = headphonesMode;
+  }, [headphonesMode]);
 
   // Check browser support
   useEffect(() => {
@@ -60,7 +111,6 @@ export function useVoiceAgent() {
     }
   }, []);
 
-  // Format timestamp (e.g. 10:45 AM)
   const getFormattedTime = () => {
     return new Date().toLocaleTimeString("en-IN", {
       hour: "2-digit",
@@ -69,13 +119,84 @@ export function useVoiceAgent() {
     });
   };
 
-  // Silence timer management
   const clearSilenceTimer = useCallback(() => {
     if (silenceTimerRef.current) {
       clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = null;
     }
   }, []);
+
+  const clearSpeechEndTimer = useCallback(() => {
+    if (speechEndTimerRef.current) {
+      clearTimeout(speechEndTimerRef.current);
+      speechEndTimerRef.current = null;
+    }
+  }, []);
+
+  // Safe SpeechRecognition start guarded against race conditions
+  const startRecognitionSafely = useCallback(() => {
+    if (
+      !recognitionRef.current ||
+      !isCallActiveRef.current ||
+      isRecognitionRunningRef.current ||
+      isStartingRecognitionRef.current
+    ) {
+      return;
+    }
+
+    isStartingRecognitionRef.current = true;
+    try {
+      recognitionRef.current.start();
+    } catch (err: unknown) {
+      const e = err as { name?: string; message?: string };
+      if (e?.name === "InvalidStateError" || e?.message?.includes("already started")) {
+        isRecognitionRunningRef.current = true;
+      } else {
+        console.warn("[SpeechRecognition start error]", err);
+      }
+    } finally {
+      isStartingRecognitionRef.current = false;
+    }
+  }, []);
+
+  // Safe SpeechRecognition stop / abort
+  const stopRecognitionSafely = useCallback((abort = false) => {
+    if (!recognitionRef.current) return;
+    try {
+      if (abort) {
+        recognitionRef.current.abort();
+      } else {
+        recognitionRef.current.stop();
+      }
+    } catch (err) {
+      console.warn("[SpeechRecognition stop/abort error]", err);
+    } finally {
+      isRecognitionRunningRef.current = false;
+      isStartingRecognitionRef.current = false;
+    }
+  }, []);
+
+  // Tap-to-interrupt handler
+  const interruptSpeech = useCallback(() => {
+    if (callStateRef.current === "Speaking") {
+      console.log("[Tap-to-Interrupt] Speech cancelled by user");
+      clearSpeechEndTimer();
+
+      if (cancelSpeechRef.current) {
+        cancelSpeechRef.current();
+        cancelSpeechRef.current = null;
+      }
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+      }
+
+      setCallState("Listening");
+      resetSilenceTimer();
+      // Immediately start listening when interrupted
+      startRecognitionSafely();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clearSpeechEndTimer, startRecognitionSafely]);
 
   const triggerSilencePrompt = useCallback(() => {
     if (
@@ -88,8 +209,8 @@ export function useVoiceAgent() {
 
     silencePromptPlayedRef.current = true;
     const silenceMessage = "Are you still there? I'm happy to help whenever you're ready.";
+    lastAriaReplyRef.current = silenceMessage;
 
-    // Add to transcript
     const ariaItem: TranscriptItem = {
       id: "aria-silence-" + Date.now(),
       speaker: "aria",
@@ -97,29 +218,46 @@ export function useVoiceAgent() {
       timestamp: getFormattedTime(),
     };
     setTranscript((prev) => [...prev, ariaItem]);
-
-    // Speak prompt
     setCallState("Speaking");
+
+    // Half-duplex: abort recognition while speaking unless in headphones mode
+    if (!headphonesModeRef.current) {
+      stopRecognitionSafely(true);
+    }
+
     cancelSpeechRef.current = speakSentences([silenceMessage], {
       onEnd: () => {
         if (isCallActiveRef.current) {
-          setCallState("Listening");
+          clearSpeechEndTimer();
+          // Requirement 1: Restart only after 500 ms delay
+          speechEndTimerRef.current = setTimeout(() => {
+            if (isCallActiveRef.current) {
+              setCallState("Listening");
+              startRecognitionSafely();
+            }
+          }, 500);
         }
       },
       onError: () => {
         if (isCallActiveRef.current) {
-          setCallState("Listening");
+          clearSpeechEndTimer();
+          speechEndTimerRef.current = setTimeout(() => {
+            if (isCallActiveRef.current) {
+              setCallState("Listening");
+              startRecognitionSafely();
+            }
+          }, 500);
         }
       },
     });
-  }, []);
+  }, [clearSpeechEndTimer, startRecognitionSafely, stopRecognitionSafely]);
 
   const resetSilenceTimer = useCallback(() => {
     clearSilenceTimer();
     if (isCallActiveRef.current && !silencePromptPlayedRef.current) {
       silenceTimerRef.current = setTimeout(() => {
         triggerSilencePrompt();
-      }, 12000); // 12 seconds
+      }, 12000);
     }
   }, [clearSilenceTimer, triggerSilencePrompt]);
 
@@ -127,6 +265,8 @@ export function useVoiceAgent() {
   const handleAriaReply = useCallback(
     (replyText: string, toolCalls: ToolCallRecord[]) => {
       if (!isCallActiveRef.current) return;
+
+      lastAriaReplyRef.current = replyText;
 
       const ariaItem: TranscriptItem = {
         id: "aria-" + Date.now(),
@@ -139,35 +279,50 @@ export function useVoiceAgent() {
       setTranscript((prev) => [...prev, ariaItem]);
       setCallState("Speaking");
       clearSilenceTimer();
+      clearSpeechEndTimer();
+
+      // Requirement 1: Call recognition.abort() when state becomes Speaking in default mode
+      if (!headphonesModeRef.current) {
+        stopRecognitionSafely(true);
+      }
 
       const sentences = splitIntoSentences(replyText);
 
       cancelSpeechRef.current = speakSentences(sentences, {
         onStart: () => {
-          // Keep recognition running in background to capture barge-in
-          try {
-            if (recognitionRef.current && isCallActiveRef.current) {
-              recognitionRef.current.start();
-            }
-          } catch {
-            // Already started or active
+          // If in headphones mode, keep recognition active to support voice barge-in
+          if (headphonesModeRef.current && isCallActiveRef.current) {
+            startRecognitionSafely();
           }
         },
         onEnd: () => {
           if (isCallActiveRef.current) {
-            setCallState("Listening");
-            resetSilenceTimer();
+            clearSpeechEndTimer();
+            // Requirement 1: Only restart recognition after speechSynthesis finishes after a 500 ms delay
+            speechEndTimerRef.current = setTimeout(() => {
+              if (isCallActiveRef.current) {
+                setCallState("Listening");
+                resetSilenceTimer();
+                startRecognitionSafely();
+              }
+            }, 500);
           }
         },
         onError: () => {
           if (isCallActiveRef.current) {
-            setCallState("Listening");
-            resetSilenceTimer();
+            clearSpeechEndTimer();
+            speechEndTimerRef.current = setTimeout(() => {
+              if (isCallActiveRef.current) {
+                setCallState("Listening");
+                resetSilenceTimer();
+                startRecognitionSafely();
+              }
+            }, 500);
           }
         },
       });
     },
-    [clearSilenceTimer, resetSilenceTimer]
+    [clearSilenceTimer, clearSpeechEndTimer, resetSilenceTimer, startRecognitionSafely, stopRecognitionSafely]
   );
 
   // Send conversation to backend
@@ -175,6 +330,11 @@ export function useVoiceAgent() {
     async (messagesToSend: { role: "user" | "assistant"; content: string }[]) => {
       setCallState("Thinking");
       clearSilenceTimer();
+
+      // Half-duplex: abort recognition during thinking in default mode
+      if (!headphonesModeRef.current) {
+        stopRecognitionSafely(true);
+      }
 
       try {
         const res = await fetch("/api/chat", {
@@ -202,7 +362,7 @@ export function useVoiceAgent() {
         );
       }
     },
-    [clearSilenceTimer, handleAriaReply]
+    [clearSilenceTimer, handleAriaReply, stopRecognitionSafely]
   );
 
   // Process customer's spoken or typed utterance
@@ -210,6 +370,12 @@ export function useVoiceAgent() {
     (text: string) => {
       const trimmed = text.trim();
       if (!trimmed || !isCallActiveRef.current) return;
+
+      // Requirement 4: Echo filter before sending to /api/chat
+      if (isEchoOfAria(trimmed, lastAriaReplyRef.current)) {
+        setInterimText("");
+        return;
+      }
 
       silencePromptPlayedRef.current = false;
       clearSilenceTimer();
@@ -225,7 +391,6 @@ export function useVoiceAgent() {
       const updatedTranscript = [...transcriptRef.current, customerItem];
       setTranscript(updatedTranscript);
 
-      // Build message payload
       const messagesPayload = updatedTranscript.map((t) => ({
         role: (t.speaker === "customer" ? "user" : "assistant") as "user" | "assistant",
         content: t.text,
@@ -236,23 +401,7 @@ export function useVoiceAgent() {
     [clearSilenceTimer, sendToBackend]
   );
 
-  // Barge-in interruption
-  const interruptSpeech = useCallback(() => {
-    if (callStateRef.current === "Speaking") {
-      console.log("[Barge-in] Speech interrupted by customer");
-      if (cancelSpeechRef.current) {
-        cancelSpeechRef.current();
-        cancelSpeechRef.current = null;
-      }
-      if (typeof window !== "undefined" && "speechSynthesis" in window) {
-        window.speechSynthesis.cancel();
-      }
-      setCallState("Listening");
-      resetSilenceTimer();
-    }
-  }, [resetSilenceTimer]);
-
-  // Setup SpeechRecognition instance
+  // Initialize single SpeechRecognition instance
   const initRecognition = useCallback(() => {
     if (typeof window === "undefined") return null;
 
@@ -270,8 +419,21 @@ export function useVoiceAgent() {
     rec.lang = "en-IN";
     rec.maxAlternatives = 1;
 
+    rec.onstart = () => {
+      isRecognitionRunningRef.current = true;
+      isStartingRecognitionRef.current = false;
+    };
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     rec.onresult = (event: any) => {
+      // Requirement 1: Ignore ALL recognition results while state is Thinking or Speaking in default mode
+      if (
+        !headphonesModeRef.current &&
+        (callStateRef.current === "Thinking" || callStateRef.current === "Speaking")
+      ) {
+        return;
+      }
+
       let finalSpeech = "";
       let interimSpeech = "";
 
@@ -284,21 +446,24 @@ export function useVoiceAgent() {
         }
       }
 
-      // Check barge-in: If Aria is currently speaking and user starts speaking
+      // Requirement 3: When Headphones mode is ON, allow voice barge-in on first interim result
       if (
+        headphonesModeRef.current &&
         callStateRef.current === "Speaking" &&
         (interimSpeech.trim().length > 1 || finalSpeech.trim().length > 1)
       ) {
         interruptSpeech();
       }
 
-      if (interimSpeech.trim().length > 0) {
-        setInterimText(interimSpeech);
-      }
+      if (callStateRef.current === "Listening") {
+        if (interimSpeech.trim().length > 0) {
+          setInterimText(interimSpeech);
+        }
 
-      if (finalSpeech.trim().length > 0) {
-        setInterimText("");
-        handleCustomerUtterance(finalSpeech);
+        if (finalSpeech.trim().length > 0) {
+          setInterimText("");
+          handleCustomerUtterance(finalSpeech);
+        }
       }
     };
 
@@ -307,7 +472,6 @@ export function useVoiceAgent() {
       console.warn("[SpeechRecognition Error]", event.error);
 
       if (event.error === "no-speech") {
-        // Expected when user pauses; recognition continues
         return;
       }
 
@@ -318,24 +482,29 @@ export function useVoiceAgent() {
         return;
       }
 
-      if (event.error === "network") {
-        console.warn("Speech recognition network hiccup; attempting restart...");
+      if (event.error === "already-started") {
+        isRecognitionRunningRef.current = true;
+        isStartingRecognitionRef.current = false;
       }
     };
 
     rec.onend = () => {
-      // Auto-restart recognition when it ends unexpectedly while the call is active
-      if (isCallActiveRef.current && callStateRef.current !== "Ended") {
-        try {
-          rec.start();
-        } catch {
-          // May already be active
-        }
+      isRecognitionRunningRef.current = false;
+      isStartingRecognitionRef.current = false;
+
+      // Auto-restart recognition ONLY when call is active and state is Listening
+      // (or in headphones mode while active)
+      if (
+        isCallActiveRef.current &&
+        callStateRef.current !== "Ended" &&
+        (callStateRef.current === "Listening" || headphonesModeRef.current)
+      ) {
+        startRecognitionSafely();
       }
     };
 
     return rec;
-  }, [handleCustomerUtterance, interruptSpeech]);
+  }, [handleCustomerUtterance, interruptSpeech, startRecognitionSafely]);
 
   // Start Call
   const startCall = useCallback(async () => {
@@ -343,9 +512,9 @@ export function useVoiceAgent() {
     setSummary(null);
     setTranscript([]);
     setInterimText("");
+    clearSpeechEndTimer();
     silencePromptPlayedRef.current = false;
 
-    // Request microphone permission upfront
     try {
       if (navigator?.mediaDevices?.getUserMedia) {
         await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -358,7 +527,6 @@ export function useVoiceAgent() {
       return;
     }
 
-    // Reset in-memory mock orders on server
     try {
       await fetch("/api/orders", {
         method: "POST",
@@ -372,12 +540,14 @@ export function useVoiceAgent() {
     isCallActiveRef.current = true;
     setCallState("Speaking");
 
-    // Initialize speech recognition
-    const rec = initRecognition();
-    recognitionRef.current = rec;
+    // Initialize single recognition instance
+    if (!recognitionRef.current) {
+      recognitionRef.current = initRecognition();
+    }
 
-    // Initial greeting
     const greeting = "Hi, this is Aria from Aura Skincare. How can I help you today?";
+    lastAriaReplyRef.current = greeting;
+
     const greetingItem: TranscriptItem = {
       id: "greeting-" + Date.now(),
       speaker: "aria",
@@ -386,38 +556,46 @@ export function useVoiceAgent() {
     };
     setTranscript([greetingItem]);
 
-    // Speak greeting, then start recognition
+    // Ensure recognition is stopped while greeting plays in default mode
+    if (!headphonesModeRef.current) {
+      stopRecognitionSafely(true);
+    }
+
     cancelSpeechRef.current = speakSentences([greeting], {
       onEnd: () => {
         if (isCallActiveRef.current) {
-          setCallState("Listening");
-          resetSilenceTimer();
-          try {
-            rec?.start();
-          } catch (e) {
-            console.warn("Recognition start error:", e);
-          }
+          clearSpeechEndTimer();
+          // Requirement 1: 500 ms delay before starting recognition after speech finishes
+          speechEndTimerRef.current = setTimeout(() => {
+            if (isCallActiveRef.current) {
+              setCallState("Listening");
+              resetSilenceTimer();
+              startRecognitionSafely();
+            }
+          }, 500);
         }
       },
       onError: () => {
         if (isCallActiveRef.current) {
-          setCallState("Listening");
-          resetSilenceTimer();
-          try {
-            rec?.start();
-          } catch (e) {
-            console.warn("Recognition start error:", e);
-          }
+          clearSpeechEndTimer();
+          speechEndTimerRef.current = setTimeout(() => {
+            if (isCallActiveRef.current) {
+              setCallState("Listening");
+              resetSilenceTimer();
+              startRecognitionSafely();
+            }
+          }, 500);
         }
       },
     });
-  }, [initRecognition, resetSilenceTimer]);
+  }, [clearSpeechEndTimer, initRecognition, resetSilenceTimer, startRecognitionSafely, stopRecognitionSafely]);
 
   // End Call & generate summary
   const endCall = useCallback(async () => {
     isCallActiveRef.current = false;
     setCallState("Ended");
     clearSilenceTimer();
+    clearSpeechEndTimer();
     setInterimText("");
 
     if (cancelSpeechRef.current) {
@@ -429,19 +607,11 @@ export function useVoiceAgent() {
       window.speechSynthesis.cancel();
     }
 
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.stop();
-        recognitionRef.current = null;
-      } catch {
-        // Already stopped
-      }
-    }
+    stopRecognitionSafely(true);
+    recognitionRef.current = null;
 
-    // Extract tool calls from current transcript
     const toolCalls = transcriptRef.current.flatMap((t) => t.toolCalls || []);
 
-    // Call /api/summary
     setIsSummarizing(true);
     try {
       const res = await fetch("/api/summary", {
@@ -458,7 +628,6 @@ export function useVoiceAgent() {
       setSummary(data.summary);
     } catch (err) {
       console.error("[Summary generation error]", err);
-      // Fallback summary
       setSummary({
         customer_intent: "OTHER",
         order_id: null,
@@ -471,24 +640,22 @@ export function useVoiceAgent() {
     } finally {
       setIsSummarizing(false);
     }
-  }, [clearSilenceTimer]);
+  }, [clearSilenceTimer, clearSpeechEndTimer, stopRecognitionSafely]);
 
   // Clean up on unmount
   useEffect(() => {
     return () => {
       isCallActiveRef.current = false;
       clearSilenceTimer();
+      clearSpeechEndTimer();
       if (cancelSpeechRef.current) cancelSpeechRef.current();
       if (typeof window !== "undefined" && "speechSynthesis" in window) {
         window.speechSynthesis.cancel();
       }
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.stop();
-        } catch {}
-      }
+      stopRecognitionSafely(true);
+      recognitionRef.current = null;
     };
-  }, [clearSilenceTimer]);
+  }, [clearSilenceTimer, clearSpeechEndTimer, stopRecognitionSafely]);
 
   return {
     callState,
@@ -498,6 +665,8 @@ export function useVoiceAgent() {
     summary,
     isSummarizing,
     isBrowserSupported,
+    headphonesMode,
+    setHeadphonesMode,
     startCall,
     endCall,
     interruptSpeech,
