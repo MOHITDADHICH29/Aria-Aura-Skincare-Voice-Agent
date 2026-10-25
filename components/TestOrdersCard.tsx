@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { Copy, Check, RotateCcw, PackageCheck, Truck, Clock, AlertCircle } from "lucide-react";
-import { MockOrder } from "@/lib/orders";
+import { MockOrder } from "@/lib/types";
 
 interface TestOrdersCardProps {
   onSelectPrompt?: (promptText: string) => void;
@@ -10,12 +10,14 @@ interface TestOrdersCardProps {
 }
 
 const SAMPLE_PROMPTS = [
+  "I want to return it",
+  "cancel my order",
+  "Mera order ORD-101 kahan hai?",
+  "I want to talk to a human",
   "Where is my order ORD-101?",
-  "I bought this 20 days ago and opened it, can I return it?",
   "Cancel ORD-103",
-  "Cancel ORD-101",
+  "I bought this 20 days ago and opened it, can I return it?",
   "Book me a flight to Goa",
-  "What's the status of ORD-999?",
 ];
 
 export const TestOrdersCard: React.FC<TestOrdersCardProps> = ({

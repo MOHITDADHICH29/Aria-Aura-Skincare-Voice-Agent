@@ -2,7 +2,8 @@
 
 import React, { useEffect, useRef } from "react";
 import { Wrench } from "lucide-react";
-import { TranscriptItem } from "@/lib/useVoiceAgent";
+import { TranscriptItem } from "@/lib/types";
+import { assertNoDevanagari } from "@/lib/language";
 
 interface TranscriptViewProps {
   transcript: TranscriptItem[];
@@ -21,6 +22,11 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [transcript, interimText]);
 
+  // Section B.8: assertNoDevanagari in development
+  if (interimText) {
+    assertNoDevanagari(interimText, "TranscriptView (live caption)");
+  }
+
   return (
     <div className="w-full flex flex-col h-72 sm:h-80 overflow-y-auto px-4 py-3 rounded-2xl bg-white/70 border border-aura-border shadow-soft space-y-3">
       {transcript.length === 0 && !interimText && (
@@ -33,7 +39,8 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
       )}
 
       {transcript.map((item) => {
-        const isCustomer = item.speaker === "customer";
+        assertNoDevanagari(item.text, `TranscriptView (${item.speaker} turn)`);
+        const isCustomer = item.speaker === "Customer";
         return (
           <div
             key={item.id}
@@ -50,7 +57,16 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
                     <Wrench className="w-2.5 h-2.5 text-stone-500" />
                     {tc.name === "get_order_details" && `Looked up ${tc.args?.order_id || "order"}`}
                     {tc.name === "cancel_order" && `Attempted cancellation ${tc.args?.order_id || "order"}`}
-                    {tc.name !== "get_order_details" && tc.name !== "cancel_order" && tc.name}
+                    {tc.name === "create_support_ticket" &&
+                      `Created Support Ticket: ${
+                        typeof tc.result === "object" && tc.result && "ticket_id" in tc.result
+                          ? String((tc.result as { ticket_id: unknown }).ticket_id)
+                          : "TKT-1001"
+                      }`}
+                    {tc.name !== "get_order_details" &&
+                      tc.name !== "cancel_order" &&
+                      tc.name !== "create_support_ticket" &&
+                      tc.name}
                   </span>
                 ))}
               </div>

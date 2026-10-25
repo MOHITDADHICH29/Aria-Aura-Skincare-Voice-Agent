@@ -7,85 +7,71 @@ import { TranscriptView } from "@/components/TranscriptView";
 import { TestOrdersCard } from "@/components/TestOrdersCard";
 import { FallbackInput } from "@/components/FallbackInput";
 import { PostCallSummaryView } from "@/components/PostCallSummaryView";
-import { useVoiceAgent } from "@/lib/useVoiceAgent";
-import { Phone, PhoneOff, Headphones, AlertCircle, Hand } from "lucide-react";
+import { useCall } from "@/hooks/useCall";
+import {
+  Phone,
+  PhoneOff,
+  Hand,
+  Mic,
+  MicOff,
+  Languages,
+} from "lucide-react";
 
 export default function Home() {
   const {
     callState,
+    language,
     transcript,
-    interimText,
-    errorMessage,
+    interimCaption,
+    isMuted,
+    callDuration,
     summary,
     isSummarizing,
-    isBrowserSupported,
-    headphonesMode,
-    setHeadphonesMode,
+    timing,
+    headphoneMode,
+    toggleHeadphoneMode,
     startCall,
     endCall,
+    chooseLanguage,
+    switchLanguage,
+    toggleMute,
     interruptSpeech,
-    handleCustomerUtterance,
-    setErrorMessage,
-  } = useVoiceAgent();
+    sendManualMessage,
+  } = useCall();
 
-  const isCallActive =
-    callState === "Listening" ||
-    callState === "Thinking" ||
-    callState === "Speaking";
-
-  const isSpeaking = callState === "Speaking";
+  const isCallActive = callState !== "Idle" && callState !== "Ended";
+  const isSpeaking = callState === "Speaking" || callState === "Greeting";
 
   const handleSelectPrompt = (promptText: string) => {
     if (!isCallActive) {
       startCall().then(() => {
         setTimeout(() => {
-          handleCustomerUtterance(promptText);
+          sendManualMessage(promptText);
         }, 1200);
       });
     } else {
-      handleCustomerUtterance(promptText);
+      sendManualMessage(promptText);
     }
   };
 
   return (
     <div className="min-h-screen flex flex-col bg-aura-bg">
-      <Header />
+      <Header headphoneMode={headphoneMode} toggleHeadphoneMode={toggleHeadphoneMode} />
 
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8">
-        {/* Error notification banner if any */}
-        {errorMessage && (
-          <div className="mb-6 p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs sm:text-sm flex items-start gap-3 shadow-sm">
-            <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-            <div className="flex-1">
-              <p className="font-semibold">Notice</p>
-              <p className="mt-0.5 text-amber-700">{errorMessage}</p>
-            </div>
-            <button
-              onClick={() => setErrorMessage(null)}
-              className="text-amber-600 hover:text-amber-800 font-bold px-2 py-0.5"
-            >
-              ×
-            </button>
-          </div>
-        )}
-
-        {!isBrowserSupported && (
-          <div className="mb-6 p-4 rounded-xl bg-blue-50 border border-blue-200 text-blue-800 text-xs sm:text-sm flex items-start gap-3">
-            <AlertCircle className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
-            <div>
-              <p className="font-semibold">Browser Recommendation</p>
-              <p className="mt-0.5 text-blue-700">
-                Web Speech API works best in Google Chrome or Microsoft Edge.
-                You can still test Aria using the fallback text input below!
-              </p>
-            </div>
-          </div>
-        )}
-
         {/* 2-Column Responsive Layout */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           {/* Main Voice Agent Card (Left/Center) */}
           <section className="lg:col-span-7 bg-white rounded-3xl border border-aura-border shadow-card p-5 sm:p-7 space-y-5">
+            {/* Hero Headline */}
+            <div className="text-center mb-4">
+              <h1 className="text-2xl md:text-3xl font-serif font-bold text-aura-text-primary tracking-tight">
+                Customer support, naturally.
+              </h1>
+              <p className="mt-2 text-sm text-aura-text-secondary max-w-xl mx-auto">
+                Your personal voice assistant for orders, deliveries and returns.
+              </p>
+            </div>
             {/* Call Action Bar */}
             <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
               <div className="text-center sm:text-left">
@@ -93,7 +79,7 @@ export default function Home() {
                   Voice Assistant Aria
                 </h1>
                 <p className="text-xs text-aura-text-secondary">
-                  Natural Indian English customer support for Aura Skincare
+                  Natural customer support in Indian English & Hinglish
                 </p>
               </div>
 
@@ -103,10 +89,35 @@ export default function Home() {
                   <button
                     onClick={interruptSpeech}
                     aria-label="Interrupt Aria and speak"
-                    className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-full border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs sm:text-sm font-semibold shadow-sm transition-all hover:scale-[1.02] active:scale-[0.98]"
+                    title="Press Space or click to interrupt"
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs sm:text-sm font-semibold shadow-2xs transition-all hover:scale-[1.02] active:scale-[0.98]"
                   >
                     <Hand className="w-3.5 h-3.5" />
                     <span>Interrupt</span>
+                  </button>
+                )}
+
+                {isCallActive && (
+                  <button
+                    onClick={toggleMute}
+                    aria-label={isMuted ? "Unmute microphone" : "Mute microphone"}
+                    className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs sm:text-sm font-medium border transition-all ${
+                      isMuted
+                        ? "bg-rose-100 text-rose-800 border-rose-300 hover:bg-rose-200"
+                        : "bg-stone-100 text-stone-700 border-stone-200 hover:bg-stone-200"
+                    }`}
+                  >
+                    {isMuted ? (
+                      <>
+                        <MicOff className="w-3.5 h-3.5 text-rose-600" />
+                        <span>Muted</span>
+                      </>
+                    ) : (
+                      <>
+                        <Mic className="w-3.5 h-3.5 text-stone-600" />
+                        <span>Mute Mic</span>
+                      </>
+                    )}
                   </button>
                 )}
 
@@ -114,7 +125,7 @@ export default function Home() {
                   <button
                     onClick={startCall}
                     aria-label="Start voice call with Aria"
-                    className="inline-flex items-center gap-2 px-6 py-2.5 rounded-full bg-aura-sage hover:bg-aura-sage-hover text-white text-sm font-semibold shadow-sm transition-all hover:shadow hover:scale-[1.02] active:scale-[0.98]"
+                    className="inline-flex items-center gap-2 px-6 py-2.5 rounded-full bg-aura-sage hover:bg-aura-sage-hover text-white text-sm font-semibold shadow-2xs transition-all hover:shadow hover:scale-[1.02] active:scale-[0.98]"
                   >
                     <Phone className="w-4 h-4" />
                     <span>Start Call</span>
@@ -123,7 +134,7 @@ export default function Home() {
                   <button
                     onClick={endCall}
                     aria-label="End voice call"
-                    className="inline-flex items-center gap-2 px-6 py-2.5 rounded-full border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-sm font-semibold shadow-sm transition-all hover:scale-[1.02] active:scale-[0.98]"
+                    className="inline-flex items-center gap-2 px-5 py-2 rounded-full border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-sm font-semibold shadow-2xs transition-all hover:scale-[1.02] active:scale-[0.98]"
                   >
                     <PhoneOff className="w-4 h-4" />
                     <span>End Call</span>
@@ -132,62 +143,47 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Central Animated Voice Orb */}
-            <VoiceOrb state={callState} onInterrupt={interruptSpeech} />
-
-            {/* Headphones Mode Toggle Switch */}
-            <div className="p-3 rounded-2xl bg-aura-bg/70 border border-aura-border flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2.5">
-                <div
-                  className={`p-2 rounded-xl transition-colors ${
-                    headphonesMode
-                      ? "bg-aura-sage text-white"
-                      : "bg-stone-200 text-stone-600"
+            {/* Language Selector Bar (labels strictly: "English (India)" and "Hinglish") */}
+            <div className="flex items-center justify-between p-2.5 rounded-2xl bg-aura-bg/80 border border-aura-border text-xs">
+              <div className="flex items-center gap-2 text-aura-text-secondary">
+                <Languages className="w-4 h-4 text-aura-sage-hover" />
+                <span className="font-medium text-aura-text-primary">Conversation Language:</span>
+              </div>
+              <div className="inline-flex items-center bg-stone-200/80 p-0.5 rounded-xl text-xs font-medium">
+                <button
+                  type="button"
+                  onClick={() => switchLanguage("en")}
+                  className={`px-3 py-1 rounded-lg transition-all ${
+                    language === "en"
+                      ? "bg-white text-aura-text-primary shadow-2xs font-semibold"
+                      : "text-aura-text-secondary hover:text-aura-text-primary"
                   }`}
                 >
-                  <Headphones className="w-4 h-4" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold text-aura-text-primary">
-                      Headphones Mode
-                    </span>
-                    <span
-                      className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
-                        headphonesMode
-                          ? "bg-emerald-100 text-emerald-800"
-                          : "bg-stone-200 text-stone-700"
-                      }`}
-                    >
-                      {headphonesMode ? "ON · Full-Duplex" : "OFF · Half-Duplex (Recommended)"}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-aura-text-secondary mt-0.5 leading-snug">
-                    {headphonesMode
-                      ? "Mic stays open while Aria speaks (voice barge-in active)."
-                      : "Mic is muted while Aria speaks to prevent audio echo feedback. Tap orb to interrupt."}
-                  </p>
-                </div>
-              </div>
-
-              {/* Toggle switch control */}
-              <button
-                type="button"
-                role="switch"
-                aria-checked={headphonesMode}
-                onClick={() => setHeadphonesMode(!headphonesMode)}
-                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-aura-sage focus:ring-offset-2 ${
-                  headphonesMode ? "bg-aura-sage" : "bg-stone-300"
-                }`}
-              >
-                <span className="sr-only">Toggle Headphones Mode</span>
-                <span
-                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
-                    headphonesMode ? "translate-x-5" : "translate-x-0"
+                  English (India)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => switchLanguage("hinglish")}
+                  className={`px-3 py-1 rounded-lg transition-all ${
+                    language === "hinglish"
+                      ? "bg-white text-aura-text-primary shadow-2xs font-semibold"
+                      : "text-aura-text-secondary hover:text-aura-text-primary"
                   }`}
-                />
-              </button>
+                >
+                  Hinglish
+                </button>
+              </div>
             </div>
+
+            {/* Central Animated Voice Orb */}
+            <VoiceOrb
+              state={callState}
+              onInterrupt={interruptSpeech}
+              callDuration={callDuration}
+              timing={timing}
+              isMuted={isMuted}
+              onSelectLanguage={(lang) => chooseLanguage(lang)}
+            />
 
             {/* Live Chat / Transcript Box */}
             <div className="space-y-2">
@@ -196,16 +192,18 @@ export default function Home() {
                 {isCallActive && (
                   <span className="text-[11px] text-aura-sage-hover font-medium flex items-center gap-1">
                     <span className="w-1.5 h-1.5 rounded-full bg-aura-sage-hover animate-pulse" />
-                    {callState === "Speaking" && !headphonesMode
-                      ? "Speaking (mic muted)"
-                      : "Live audio connected"}
+                    {callState === "Speaking" || callState === "Greeting"
+                      ? "Speaking (mic paused)"
+                      : isMuted
+                      ? "Microphone Muted"
+                      : `Listening (${language === "hinglish" ? "Hinglish" : "English"})`}
                   </span>
                 )}
               </div>
 
               <TranscriptView
                 transcript={transcript}
-                interimText={interimText}
+                interimText={interimCaption}
                 isCallActive={isCallActive}
               />
             </div>
@@ -213,7 +211,7 @@ export default function Home() {
             {/* Fallback Text Input */}
             <div>
               <FallbackInput
-                onSend={handleCustomerUtterance}
+                onSend={sendManualMessage}
                 disabled={!isCallActive}
                 isCallActive={isCallActive}
               />
@@ -256,6 +254,9 @@ export default function Home() {
                 </li>
                 <li>
                   <strong className="text-aura-text-primary">Cash on Delivery:</strong> Available up to ₹2,500.
+                </li>
+                <li>
+                  <strong className="text-aura-text-primary">Support Tickets:</strong> Escalated tickets are responded to within 24 hours.
                 </li>
               </ul>
             </div>

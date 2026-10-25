@@ -1,33 +1,17 @@
-export interface MockOrder {
-  order_id: string;
-  customer_name: string;
-  product: string;
-  value: number;
-  status: "Processing" | "Out for Delivery" | "Delivered" | "Cancelled";
-  tracking: string;
-  days_since_delivery: number | null;
-  notes: string;
-}
+import {
+  MockOrder,
+  ComputedOrderDetails,
+  CancelOrderResult,
+} from "./types";
+import {
+  canCancelOrder,
+  isReturnEligible,
+  computeReturnNote,
+  isCodAvailable,
+  doesShippingFeeApply,
+} from "./policy";
 
-export interface ComputedOrderDetails {
-  found: boolean;
-  order_id?: string;
-  customer_name?: string;
-  product?: string;
-  value?: number;
-  status?: string;
-  tracking?: string;
-  notes?: string;
-  can_cancel?: boolean;
-  return_eligible?: boolean;
-  days_since_delivery?: number | null;
-  return_note?: string;
-  cod_available?: boolean;
-  shipping_fee_applies?: boolean;
-  error?: "ORDER_NOT_FOUND" | "MISSING_ORDER_ID";
-}
-
-const INITIAL_ORDERS: MockOrder[] = [
+export const INITIAL_ORDERS: MockOrder[] = [
   {
     order_id: "ORD-101",
     customer_name: "Priya Sharma",
@@ -60,7 +44,7 @@ const INITIAL_ORDERS: MockOrder[] = [
   },
 ];
 
-// In-memory state
+// In-memory store
 let currentOrders: MockOrder[] = JSON.parse(JSON.stringify(INITIAL_ORDERS));
 
 export function resetOrders(): void {
@@ -73,19 +57,14 @@ export function getAllOrders(): MockOrder[] {
 
 /**
  * Normalises messy spoken order IDs from Web Speech API into canonical ORD-XXX.
- * Examples:
- * - "ORD-101" -> "ORD-101"
- * - "ord 101" -> "ORD-101"
- * - "o r d one zero one" -> "ORD-101"
- * - "order one hundred and one" / "order 101" -> "ORD-101"
- * - "101" -> "ORD-101"
+ * Handles spoken digits, words like 'one zero one', 'oh', 'one hundred and one', etc.
  */
 export function normalizeOrderId(rawId?: string | null): string {
   if (!rawId || typeof rawId !== "string") return "";
 
   let cleaned = rawId.toLowerCase().trim();
 
-  // Replace spoken word numbers
+  // Map spoken number words to digits
   const numberWordMap: Record<string, string> = {
     zero: "0",
     oh: "0",
@@ -105,22 +84,20 @@ export function normalizeOrderId(rawId?: string | null): string {
     cleaned = cleaned.replace(reg, digit);
   }
 
-  // Remove spaces, punctuation, dashes, hyphens
+  // Remove spaces, punctuation, dashes
   cleaned = cleaned.replace(/[^a-z0-9]/g, "");
 
-  // Match numbers (e.g. 101, 102, 103)
+  // Match 3 or more digits (e.g. 101, 102, 103)
   const numMatch = cleaned.match(/\d{3,}/);
   if (numMatch) {
     return `ORD-${numMatch[0]}`;
   }
 
-  // If already starts with ord followed by digits
   if (cleaned.startsWith("ord")) {
     const digits = cleaned.replace("ord", "");
     if (digits) return `ORD-${digits}`;
   }
 
-  // If only digits exist
   const justDigits = cleaned.replace(/\D/g, "");
   if (justDigits.length > 0) {
     return `ORD-${justDigits}`;
@@ -146,19 +123,11 @@ export function getOrderDetails(rawId: string): ComputedOrderDetails {
     return { found: false, error: "ORDER_NOT_FOUND" };
   }
 
-  const isProcessing = order.status === "Processing";
-  const isDelivered = order.status === "Delivered";
-  const daysSince = order.days_since_delivery;
-  const returnEligible = isDelivered && daysSince !== null && daysSince <= 7;
-
-  let returnNote = "Not delivered yet; returns apply within 7 days of delivery for unopened items.";
-  if (isDelivered) {
-    if (daysSince !== null && daysSince <= 7) {
-      returnNote = `Delivered ${daysSince} day(s) ago. Eligible for return within the 7-day return window for unopened products.`;
-    } else {
-      returnNote = `Delivered ${daysSince ?? "more than 7"} days ago. Ineligible for return as the 7-day return window has passed.`;
-    }
-  }
+  const canCancel = canCancelOrder(order.status);
+  const returnEligible = isReturnEligible(order.status, order.days_since_delivery);
+  const returnNote = computeReturnNote(order.status, order.days_since_delivery);
+  const codAvailable = isCodAvailable(order.value);
+  const shippingFeeApplies = doesShippingFeeApply(order.value);
 
   return {
     found: true,
@@ -169,25 +138,19 @@ export function getOrderDetails(rawId: string): ComputedOrderDetails {
     status: order.status,
     tracking: order.tracking,
     notes: order.notes,
-    can_cancel: isProcessing,
+    can_cancel: canCancel,
     return_eligible: returnEligible,
-    days_since_delivery: daysSince,
+    days_since_delivery: order.days_since_delivery,
     return_note: returnNote,
-    cod_available: order.value <= 2500,
-    shipping_fee_applies: order.value < 499,
+    cod_available: codAvailable,
+    shipping_fee_applies: shippingFeeApplies,
   };
 }
 
 /**
  * Cancel order if status is Processing.
  */
-export function cancelOrder(rawId: string): {
-  success: boolean;
-  order_id?: string;
-  reason?: string;
-  status?: string;
-  error?: string;
-} {
+export function cancelOrder(rawId: string): CancelOrderResult {
   if (!rawId || rawId.trim().length === 0) {
     return { success: false, error: "MISSING_ORDER_ID", reason: "No order ID was provided." };
   }
@@ -207,7 +170,7 @@ export function cancelOrder(rawId: string): {
 
   const order = currentOrders[orderIndex];
 
-  if (order.status !== "Processing") {
+  if (!canCancelOrder(order.status)) {
     let explanation = `Order ${order.order_id} cannot be cancelled because it is already ${order.status}.`;
     if (order.status === "Out for Delivery" || order.status === "Delivered") {
       explanation += " Once dispatched, orders cannot be cancelled online. If you no longer want the item, you may refuse delivery at the doorstep.";
@@ -220,7 +183,6 @@ export function cancelOrder(rawId: string): {
     };
   }
 
-  // Update in-memory state
   order.status = "Cancelled";
   order.notes = "Cancelled by customer via voice support.";
 

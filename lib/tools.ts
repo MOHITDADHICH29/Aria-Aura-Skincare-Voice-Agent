@@ -1,29 +1,18 @@
 import { Type } from "@google/genai";
-import { getOrderDetails, cancelOrder } from "./orders";
 
-export interface ToolCallRecord {
-  name: string;
-  args: Record<string, unknown>;
-  result: unknown;
-}
-
-/**
- * Gemini tool definitions using @google/genai Type schema
- */
-export const geminiToolDeclarations = [
+export const geminiToolDeclarations: any = [
   {
     functionDeclarations: [
       {
         name: "get_order_details",
         description:
-          "Fetches real-time status, tracking info, and deterministic return/cancellation policy flags for an Aura Skincare order.",
+          "Fetches real-time status, tracking information, and return/cancellation policy flags for an Aura Skincare order by order ID.",
         parameters: {
           type: Type.OBJECT,
           properties: {
             order_id: {
               type: Type.STRING,
-              description:
-                "The order ID provided by the customer, e.g. 'ORD-101', 'ord 101', '101', or spoken numbers.",
+              description: "The order ID to look up, e.g. ORD-101, ORD-102, ORD-103.",
             },
           },
           required: ["order_id"],
@@ -32,42 +21,42 @@ export const geminiToolDeclarations = [
       {
         name: "cancel_order",
         description:
-          "Cancels an Aura Skincare order if and only if its status is Processing. Agent MUST ask the customer for explicit confirmation before calling this tool.",
+          "Cancel an order that is currently in Processing status. MUST ONLY be invoked after explicit confirmation from the customer.",
         parameters: {
           type: Type.OBJECT,
           properties: {
             order_id: {
               type: Type.STRING,
-              description:
-                "The order identifier to cancel (e.g. 'ORD-103').",
+              description: "The order ID to cancel, e.g. ORD-103.",
             },
           },
           required: ["order_id"],
         },
       },
+      {
+        name: "create_support_ticket",
+        description:
+          "Create an escalated support ticket for human representative review. Use ONLY when the customer asks for a human, reports damaged/defective products, or has an out-of-scope issue that policy cannot resolve.",
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            issue_summary: {
+              type: Type.STRING,
+              description: "A clear, concise summary of the customer's problem or escalation reason.",
+            },
+            order_id: {
+              type: Type.STRING,
+              description: "Optional order ID related to the issue, e.g. ORD-101.",
+            },
+            priority: {
+              type: Type.STRING,
+              enum: ["LOW", "MEDIUM", "HIGH"],
+              description: "Priority of the ticket based on customer sentiment and urgency.",
+            },
+          },
+          required: ["issue_summary"],
+        },
+      },
     ],
   },
 ];
-
-/**
- * Server-side execution of registered tools.
- */
-export function executeTool(name: string, args: Record<string, unknown>): unknown {
-  console.log(`[Tool Execution] Executing tool '${name}' with args:`, JSON.stringify(args));
-
-  if (name === "get_order_details") {
-    const orderId = String(args?.order_id || "");
-    const result = getOrderDetails(orderId);
-    console.log(`[Tool Execution] Result for '${name}':`, JSON.stringify(result));
-    return result;
-  }
-
-  if (name === "cancel_order") {
-    const orderId = String(args?.order_id || "");
-    const result = cancelOrder(orderId);
-    console.log(`[Tool Execution] Result for '${name}':`, JSON.stringify(result));
-    return result;
-  }
-
-  return { error: `Unknown tool name: ${name}` };
-}

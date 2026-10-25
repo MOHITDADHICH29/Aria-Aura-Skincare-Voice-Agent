@@ -2,11 +2,11 @@
 
 import React, { useState } from "react";
 import { Copy, Check, RotateCcw, FileText, CheckCircle2, AlertTriangle, ShieldCheck, HeartPulse } from "lucide-react";
-import { CallSummary } from "@/app/api/summary/route";
-import { TranscriptItem } from "@/lib/useVoiceAgent";
+import { PostCallSummary, TranscriptItem } from "@/lib/types";
+import { assertNoDevanagari } from "@/lib/language";
 
 interface PostCallSummaryViewProps {
-  summary: CallSummary | null;
+  summary: PostCallSummary | null;
   transcript: TranscriptItem[];
   isSummarizing: boolean;
   onStartNewCall: () => void;
@@ -22,6 +22,12 @@ export const PostCallSummaryView: React.FC<PostCallSummaryViewProps> = ({
 
   const formattedJson = summary ? JSON.stringify(summary, null, 2) : "{}";
 
+  // Section B.8: assertNoDevanagari in development
+  if (summary) {
+    assertNoDevanagari(formattedJson, "PostCallSummaryView (JSON viewer)");
+    assertNoDevanagari(summary.call_summary, "PostCallSummaryView (narrative summary)");
+  }
+
   const handleCopy = () => {
     navigator.clipboard.writeText(formattedJson);
     setCopied(true);
@@ -33,6 +39,7 @@ export const PostCallSummaryView: React.FC<PostCallSummaryViewProps> = ({
       case "POSITIVE":
         return "bg-emerald-50 text-emerald-700 border-emerald-200";
       case "NEGATIVE":
+      case "FRUSTRATED":
         return "bg-rose-50 text-rose-700 border-rose-200";
       default:
         return "bg-stone-50 text-stone-700 border-stone-200";
@@ -131,12 +138,30 @@ export const PostCallSummaryView: React.FC<PostCallSummaryViewProps> = ({
 
             <div className="p-3 rounded-xl bg-aura-bg/60 border border-aura-border space-y-1">
               <span className="text-[10px] uppercase font-semibold text-aura-text-muted flex items-center gap-1">
-                <AlertTriangle className="w-3 h-3 text-amber-500" /> Follow-up
+                <AlertTriangle className="w-3 h-3 text-amber-500" /> Escalation
               </span>
-              <p className="text-xs font-semibold text-aura-text-primary">
-                {summary.follow_up_needed ? "Required" : "None needed"}
-              </p>
+              <span
+                className={`inline-block text-[11px] font-medium px-2 py-0.5 rounded-full border ${
+                  summary.escalation
+                    ? "bg-rose-50 text-rose-700 border-rose-200"
+                    : "bg-emerald-50 text-emerald-700 border-emerald-200"
+                }`}
+              >
+                {summary.escalation ? "Escalated" : "Resolved by AI"}
+              </span>
             </div>
+          </div>
+
+          {/* Language & Ticket Details Bar */}
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="px-2.5 py-1 rounded-lg bg-stone-100 text-stone-700 border border-stone-200 font-medium">
+              Language: <strong className="text-stone-900">{summary.language === "hinglish" ? "Hinglish" : "English (India)"}</strong>
+            </span>
+            {summary.tickets_created && summary.tickets_created.length > 0 && (
+              <span className="px-2.5 py-1 rounded-lg bg-amber-50 text-amber-800 border border-amber-200 font-medium">
+                Tickets Created: <strong className="font-mono">{summary.tickets_created.join(", ")}</strong> (ETA: 24h)
+              </span>
+            )}
           </div>
 
           {/* Factual Summary */}
@@ -192,7 +217,7 @@ export const PostCallSummaryView: React.FC<PostCallSummaryViewProps> = ({
               {transcript.map((t) => (
                 <div key={t.id} className="text-xs leading-relaxed">
                   <span className="font-semibold text-aura-text-primary">
-                    [{t.timestamp}] {t.speaker === "customer" ? "Customer" : "Aria"}:
+                    [{t.timestamp}] {t.speaker}:
                   </span>{" "}
                   <span className="text-aura-text-secondary">{t.text}</span>
                 </div>
