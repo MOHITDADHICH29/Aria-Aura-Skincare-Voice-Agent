@@ -1,258 +1,159 @@
-# Aria · Aura Skincare Voice Support Specialist
+# Aria: AI Voice Support Agent for Aura Skincare
 
-> **Live AI Voice Customer Support Agent for Aura Skincare (Indian D2C Skincare Brand)**
-> Built with Next.js (App Router), TypeScript, Tailwind CSS, Google Gemini (`@google/genai`), and Web Speech API.
+I built Aria for the Datastraw AI assessment. She is a browser-based voice agent for a fictional Indian skincare brand, Aura Skincare. You click Start Call, talk to her, and she answers out loud. She can look up orders, cancel eligible ones, raise a support ticket, and she sticks to the brand's policies.
 
----
+- **Live app**: [paste Vercel URL]
+- **Demo video**: [paste video link]
+- **Repo**: https://github.com/MOHITDADHICH29/Aria-Aura-Skincare-Voice-Agent
 
-## 1. Overview
-
-**Aria** is a browser-based AI voice customer support specialist for **Aura Skincare**, a premium organic Indian D2C skincare brand. Customers click **"Start Call"**, are welcomed with an upfront language choice, speak naturally in Indian English or Hinglish, and hear Aria's spoken replies within 1-2 seconds.
-
-Aria executes real-time server-side function calling to look up orders, process cancellations, check return eligibility, and create escalation support tickets — all while adhering strictly to brand policy. When the call ends a structured JSON summary (with sentiment, escalation status, and language used) is displayed and ready for CRM logging.
+Use Chrome or Edge, allow the microphone, and click **Start Call**. The page has a Test Orders panel with the three sample orders and a list of sentences you can try.
 
 ---
 
-## 2. Key Features
+## What she can do
 
-### 🌐 Language Choice Greeting Flow (New)
-- On every call, Aria speaks a pre-synthesised, cached greeting: *"Hi, this is Aria from Aura Skincare. Would you like to continue in English, or in Hinglish?"*
-- Client-side keyword matching detects the choice without any LLM call (fast, deterministic).
-  - **Hinglish triggers:** `hinglish`, `hindi`, `हिंदी`, `हिन्दी`, `mix`, `hindi mein`, `hinglish mein`
-  - **English triggers:** `english`, `angrezi`, `अंग्रेज़ी`, `अंग्रेजी`, `eng`
-- If unclear, Aria asks once more (*"Sorry, English or Hinglish?"*), then defaults to English.
-- If the customer ignores the greeting and states a request (e.g. *"Mera order kahan hai?"*), the language is detected from Devanagari script or common Hindi words (`mera`, `kahan`, `hai`, `kya`, `chahiye`, etc.) and the call continues in the detected language.
-- Language choice syncs with the header selector and can be changed mid-call.
+- Starts the call by asking whether you want English or Hinglish, then continues in that language. You can speak your choice or click a button.
+- Looks up orders (`ORD-101`, `ORD-102`, `ORD-103`) and tells you the status, delivery details, and what you are allowed to do with the order.
+- Cancels an order only if it is still Processing, and asks for confirmation first.
+- Declines things the policy doesn't allow (for example returning an opened product after 20 days, or cancelling an order that is out for delivery) and doesn't promise refunds.
+- Creates a support ticket when a customer asks for a human or reports a damaged product.
+- Says no politely to unrelated requests (like booking a flight).
+- Asks one short question when a request is vague (*"I want to return it"*), instead of guessing.
+- Handles unknown or missing order IDs and unclear audio by asking the customer to repeat.
+- After the call, shows the full transcript and a JSON summary.
 
-### 🗣️ Hinglish Voice Support (New)
-- A language selector in the header switches between **English (India)** and **हिन्दी / Hinglish**.
-- Switching sets speech recognition to `en-IN` (English) or `hi-IN` (Hinglish).
-- Hinglish replies use simple Roman script with order IDs, product names, and statuses in English (e.g. *"Aapka order ORD-101 aaj shaam 6 baje tak pahunch jayega."*).
-- TTS uses `hi-IN` browser voice for Hinglish or the configured Gemini voice. **No style instruction text is ever spoken aloud.**
-- If the customer switches language mid-call, Aria detects the shift and continues in the new language.
+**Optional items from the brief that I chose to build**: interruption (tap the orb or press Space; Headphones Mode adds voice interruption), Hinglish, multiple tools (`get_order_details`, `cancel_order`, `create_support_ticket`), ambiguous-request handling, and a few call-experience touches (call timer, mute button, response-time readout). I skipped multi-brand support on purpose (see Design decisions).
 
-### ❓ Ambiguous Request Handling (New)
-- When a request is vague (*"I want to return it"*, *"cancel my order"*, *"where is my stuff"*, *"it's not working"*), Aria asks **exactly one** short clarifying question — never guesses and never calls a tool.
-- If an order ID is given without an intent, Aria asks what the customer would like to do.
-- If two intents appear in one message, Aria handles them one at a time and confirms before moving on.
-- Contextual pronouns (*"yes"*, *"no"*, *"that one"*, *"it"*) are resolved from the previous turn.
-- **Never more than one question per reply.**
+---
 
-### 🎫 Support Ticket Tool: `create_support_ticket` (New)
-- Signature: `create_support_ticket(issue_summary: string, order_id?: string, priority: "LOW" | "MEDIUM" | "HIGH")`
-- Creates an in-memory mock ticket returning `{ ticket_id: "TKT-1001", eta: "within 24 hours" }`.
-- Used **only** when the customer asks for a human, reports a damaged product, is upset after policy was explained, or asks something Aria cannot answer.
-- Aria announces intent first, then creates the ticket, then gives the ticket ID and SLA. **Never promises a refund or replacement outcome.**
-- The ticket appears as a chip badge in the live transcript.
-- Post-call JSON summary includes `tickets_created: string[]` and `escalation: boolean`.
+## How it works
 
-### 🔊 Simplified & Reliable Voice Pipeline (New)
-- **Standard 24kHz WAV Playback**: Raw 16-bit mono PCM (24000 Hz) returned by Gemini is wrapped in a valid 44-byte WAV header on the server and returned as `audio/wav`.
-- **Pure HTMLAudioElement Playback**: Uses standard HTML5 `Audio` elements with preloading (`audio.load()`), completely eliminating Web Audio scheduling, silence-trimming artifacts, and audio clipping.
-- **Single Request per Reply**: Replies up to 400 characters are sent as ONE `/api/tts` request. Long replies are split at sentence boundaries into at most two chunks of at least 120 characters.
-- **Seamless Back-to-Back Chaining**: When a second chunk exists, it preloads early and begins instantly in the first chunk's `"ended"` event with zero gap.
-- **Strict Female-Only Fallback**: Browser `SpeechSynthesis` is only used if Gemini TTS fails after one retry (12s timeout). Uses exclusively `en-IN` or English female voices (never `hi-IN` for English text). If unavailable, displays text only. Spoken as a single utterance at rate 1.0 and pitch 1.0.
-- **Diagnostic Telemetry**: Every spoken reply logs engine used (`gemini` or `browser`), fallback reason, voice name, sample rate, and audio duration to the browser developer console.
-- **Developer Voice Evaluation Suite**: Visit [`/voice-test`](file:///d:/projects/Project%20voice%20agent/app/voice-test/page.tsx) to listen to candidate Gemini prebuilt voices (Kore, Erinome, Sulafat, Aoede, Leda, Zephyr, Autonoe, Callirrhoe, Despina) using the same WAV playback pipeline.
+```
+Browser (Chrome / Edge)
+  Microphone -> Web Speech API (speech to text)
+             -> language check (keyword matching in code)
+             -> call state machine (idle, language choice, listening, thinking, speaking, ended)
+  Reply audio <- HTMLAudioElement (Gemini TTS as WAV), browser voice as fallback
 
-### 🎧 Headphone & Half-Duplex Echo Control (New)
-- **Default Half-Duplex Mode**: Recognition is aborted when Aria speaks; restarts after speech ends plus a 500ms safety buffer. Prevents laptop speaker loopback.
-- **Headphone Mode Toggle**: Header button toggles full-duplex mode for headphone users with natural speech barge-in.
-- **Echo Filtering**: Last spoken response is tracked; echoed transcriptions are automatically discarded.
+Next.js server (API routes, the API key stays here)
+  /api/chat    history + language -> Gemini with function calling (max 4 rounds)
+               tools: lib/orders.ts, lib/tickets.ts
+  /api/tts     clean reply text -> Gemini TTS -> WAV
+  /api/summary transcript + tool calls -> structured JSON summary
+```
 
-### ⚡ Confident Voice Delivery & Prompt Engineering (New)
-- **Answers First**: Aria answers the question directly before asking clarifying questions.
-- **No Hedging or Fillers**: Prohibits hedging words (*"maybe"*, *"perhaps"*, *"I think"*) and filler openers (*"Well"*, *"Um"*, *"Actually"*, *"Alright"*).
-- **Concise Word Cap**: Maximum 30 words per turn with short, crisp declarative sentences and no ellipses or trailing pauses.
-- **Clean Pronunciation**: Order IDs (*"ORD-101"* -> *"O R D one zero one"*), ticket IDs (*"TKT-1001"* -> *"T K T one zero zero one"*), and currencies (*"₹699"* -> *"699 rupees"*) are phonetically sanitized before TTS.
+One turn goes like this: the browser turns my speech into text, sends the conversation to `/api/chat`, Gemini decides whether it needs a tool, the server runs the tool and gives the result back, Gemini writes a short reply, and `/api/tts` turns the reply into audio that the browser plays.
 
-### ⏱️ Improved Call Experience (New)
-- **Live Call Timer**: `MM:SS` counter next to the state badge, starts when the call begins.
-- **Mute Mic Toggle**: Button during a call; stops the microphone without ending the call.
-- **Last Response Time Readout**: Shows *"Last response time: X.Xs"* — time from end of customer speech to first audio.
-- **Pre-cached Phrases**: Greeting, clarifications, and common acknowledgements are synthesised once and replayed from cache for 0ms playback.
-- **Space Bar Interrupt**: Press Space while Aria is speaking to instantly interrupt her (unless focus is in a text input).
-- **Tap-to-Interrupt Orb**: Click the central orb while Aria speaks to interrupt immediately.
+Three decisions shape most of the behaviour:
 
-### 🔁 Half-Duplex Turn-Taking (Preserved & Enhanced)
-- Microphone is off during Aria's speaking phase; recognition restarts only after TTS finishes + 500ms delay.
-- Eliminates acoustic echo loops without requiring hardware headphones.
+1. **Policy rules live in code, not in the prompt.** `get_order_details` returns computed flags such as `can_cancel`, `return_eligible`, and `days_since_delivery`. The model reads these flags and explains them, so it never does date maths or decides policy by itself. `cancel_order` re-checks the rule on the server.
+2. **The language choice is detected in code.** A small function matches keywords in what the customer said (*"English"*, *"Hinglish"*, and so on). It is instant and predictable, and it avoids an extra LLM call.
+3. **Half-duplex by default.** The microphone is off while Aria speaks and comes back on about half a second after she finishes. This stops her from hearing herself through laptop speakers.
 
-### 🛒 Deterministic Policy Engine (Preserved)
-- `can_cancel`, `return_eligible`, `days_since_delivery`, `return_note` all computed server-side — the LLM never guesses dates or policy.
-- Safety confirmation required before `cancel_order` is invoked.
+---
 
-### 📋 Post-Call JSON Summary (Extended)
+## Setup
+
+**Requirements**: Node.js 18 or newer and a Gemini API key (the free tier is enough).
+
+```bash
+npm install
+cp .env.example .env.local  # put your key in .env.local
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000) in Chrome or Edge.
+
+### Environment variables (`.env.local`)
+
+```env
+GEMINI_API_KEY=""      # server-side only, never exposed to the browser
+GEMINI_MODEL=""        # chat model, for example a Gemini flash-lite model
+GEMINI_TTS_VOICE=""    # one female prebuilt voice, for example Kore
+```
+
+Browser speech recognition needs HTTPS, so the microphone works on localhost and on the deployed site.
+
+---
+
+## Deployment
+
+I deployed it on Vercel. Import the GitHub repo, add the three environment variables in the project settings, and deploy. After changing a variable, redeploy.
+
+---
+
+## Tests
+
+```bash
+npm test
+```
+
+The unit tests cover the pure logic: order ID normalisation, the policy flags for all three orders, the language detection, and the text clean-up before speech. I also ran these conversations by hand on the app:
+
+| # | What I said | Expected | Result |
+|---|---|---|---|
+| 1 | *"Where is my order ORD-101?"* | Looks up the order, says it is out for delivery | Pass |
+| 2 | *"I received ORD-102 two weeks ago, can I return it?"* | Explains the 7-day return window, no refund promise | Pass |
+| 3 | *"I want to return it"* | One question asking for the order ID, no tool call | Pass |
+| 4 | *"Cancel my order"* | One question asking for the order ID, no tool call | Pass |
+| 5 | *"Cancel ORD-103"*, then *"yes"* | Asks to confirm, then cancels | Pass |
+| 6 | *"Mera order ORD-101 kahan hai?"* | Replies in Roman-script Hinglish | Pass |
+| 7 | *"I want to talk to a human, my serum arrived shattered"* | Creates a high-priority ticket, no promise of a replacement | Pass |
+| 8 | Ending the call | Transcript and JSON summary appear | Pass |
+
+---
+
+## Post-call summary
 
 ```json
 {
-  "customer_intent": "...",
-  "order_id": "ORD-XXX",
-  "resolution_status": "Resolved | Unresolved | Escalated | Partial",
-  "call_summary": "...",
-  "tools_used": ["get_order_details", "create_support_ticket"],
-  "customer_sentiment": "Positive | Neutral | Frustrated | Angry",
-  "follow_up_needed": true,
-  "language": "en | hinglish",
-  "tickets_created": ["TKT-1001"],
-  "escalation": true
+  "customer_intent": "ORDER_TRACKING",
+  "order_id": "ORD-101",
+  "resolution_status": "RESOLVED",
+  "call_summary": "Customer asked where ORD-101 is. It is out for delivery, expected by 6 PM today.",
+  "tools_used": ["get_order_details"],
+  "customer_sentiment": "Neutral",
+  "follow_up_needed": false,
+  "language": "en",
+  "tickets_created": [],
+  "escalation": false
 }
 ```
 
 ---
 
-## 3. Architecture
+## Limitations
 
-```
-Browser (Chrome / Edge)
-  Microphone --> Web Speech API (en-IN or hi-IN)
-             --> Language Keyword Detector (client-side, no LLM)
-             --> Voice State Machine
-                 (idle -> awaiting_language_choice -> listening -> thinking -> speaking -> ended)
-  Space / Orb Tap  -->  Interrupt Audio Playback
-  Voice State Machine --> HTMLAudioElement (Gemini 24kHz WAV + SpeechSynthesis fallback)
-
-Next.js Server
-  /api/chat    POST (history + language) from State Machine
-               buildAriaSystemPrompt(language) -> Gemini (gemini-3.1-flash-lite)
-               Function Calling Loop (max 4 turns)
-                 -> lib/orders.ts  (Deterministic Policy Engine)
-                 -> lib/tickets.ts (In-memory Ticket Store)
-  /api/summary POST (transcript + toolCalls + language)
-               -> Gemini Structured Summary (language, tickets_created, escalation)
-  /api/tts     POST (clean text only, no style prefix)
-               serverAudioCache -> Gemini TTS audio bytes
-```
+- **Chrome and Edge only.** The browser speech API is missing or unreliable in other browsers, so those users get a text box instead.
+- **Speech recognition quality** depends on the browser, microphone, and accent. Hinglish is the weakest area because the recogniser expects one language at a time.
+- **Echo**: on speakers, the mic is switched off while Aria talks, so interrupting by voice only works in Headphones Mode. Tapping the orb or pressing Space always works.
+- **The Gemini TTS free tier** has a low request limit. When it fails, the app falls back to a browser voice, which sounds different. Common phrases are cached to reduce this.
+- **Orders and tickets are in memory** and reset when the server restarts. A real version would use an order system and a database.
+- **Typical response time on my setup**: ~1.5s–2.5s turn-taking latency.
 
 ---
 
-## 4. Setup and Local Run
+## Design decisions
 
-### Prerequisites
-- Node.js v18+ (tested on Node v22)
-- npm / pnpm / yarn
-- Google Gemini API Key (free tier sufficient; the app cascades through fallback models automatically)
-
-### Installation
-
-```bash
-cd "Project voice agent"
-npm install
-cp .env.example .env.local
-# Edit .env.local and add your GEMINI_API_KEY
-```
-
-### Environment Configuration (.env.local)
-
-```env
-GEMINI_API_KEY="your_gemini_api_key_here"
-GEMINI_MODEL="gemini-3.1-flash-lite"
-GEMINI_TTS_VOICE="Kore"
-```
-
-> `GEMINI_TTS_STYLE` has been removed. Confident delivery comes from a well-chosen prebuilt voice, sentence-level chunking, and prompt-level direction — no instruction prefix is ever spoken aloud.
-
-### Run Locally
-
-```bash
-npm run dev
-```
-
-Open [http://localhost:3000](http://localhost:3000) in **Google Chrome** or **Microsoft Edge**.
+- **Why she asks for the language first.** The browser recogniser takes one language setting at the start. If it is wrong, words and order IDs get misheard. Asking first sets it correctly from the first real sentence.
+- **Why vague requests get one question instead of a guess.** A wrong guess can cancel the wrong order, and a cancellation can't be undone. One extra question is cheaper than that mistake.
+- **Why tickets never promise an outcome.** A ticket sends the case to a human who can check damage or courier problems. Aria isn't allowed to promise a refund or replacement, so she gives the ticket ID and the 24-hour follow-up time.
+- **Why tool calls show as chips in the transcript.** Tools are invisible in a voice call. A small chip such as *"Support ticket TKT-1001 created"* shows that something actually happened and makes calls easier to review.
+- **Why I removed the spoken style instruction.** My first version added a line like *"say this in a confident voice"* before each reply, and the TTS sometimes read it aloud. I removed it and now get a confident sound from a fixed voice, short direct sentences, and a prompt that bans hedging and filler words.
+- **Why Hinglish is written in Roman letters.** Most people type and read Hinglish in Roman script, and it is easier for the voice to pronounce and for a reviewer to read. The app converts any Devanagari from the recogniser to Roman letters before showing it.
+- **Why no multi-brand support.** It needs per-brand prompts, data, and rules, and it adds latency and risk without helping this assignment. I preferred one reliable brand.
 
 ---
 
-## 5. Deployment to Vercel
+## How I think
 
-```bash
-npm install -g vercel
-vercel login
-vercel                                  # preview deployment
-vercel env add GEMINI_API_KEY production
-vercel env add GEMINI_MODEL production
-vercel env add GEMINI_TTS_VOICE production
-vercel --prod                           # production deployment
-```
-
-> Web Speech API requires HTTPS. Vercel provisions SSL automatically, so microphone permissions work out of the box on the deployed domain.
+1. **Why this architecture and stack?** I wanted a pipeline I could build in two days, run for free, and explain end to end: browser speech recognition, then Gemini with function calling, then text to speech. A speech-to-speech API would be faster, but it hides the steps I wanted to control, especially tool calling and guardrails. Next.js lets me keep the API key and the tool logic on the server and deploy to Vercel easily.
+2. **What was the hardest part?** Turn-taking. Aria's voice came back through the microphone, so she answered herself and the speech kept breaking. I made the call half-duplex by default, added a filter that drops transcripts that mostly repeat her last reply, and made interruption a deliberate action (tap, Space, or Headphones Mode). The second hard part was the voice itself: gaps, clicks, and an unwanted switch to a browser voice. I fixed this by sending a whole reply as one TTS request and playing it as a standard WAV file instead of stitching small pieces together.
+3. **What would I improve first with one more week?** The speech layer. I'd move to streaming speech recognition and a streaming Indian-English voice for lower latency and better Hinglish accuracy, with proper echo cancellation for true barge-in. Then I'd build an automated set of scripted calls to catch policy regressions.
+4. **What changes at 1,000 calls a day?** Cost per call and API rate limits become the first problem, so I would track both and add a second provider as a backup. I would replace the mock data with the real order system, verify the customer's identity before sharing order details or cancelling, store calls and tickets in a database, and handle personal data properly. I'd also add monitoring for latency and failures, a real human handoff, and regression tests for the policy answers.
 
 ---
 
-## 6. Test Script and Evaluation Conversations
+## AI tools
 
-```bash
-node --dns-result-order=ipv4first test-scenarios.js
-```
-
-### Verified Test Scenarios
-
-| # | Customer Input | Language | Expected Behaviour | Status |
-|---|---|---|---|---|
-| 1 | *"Where is my order ORD-101?"* | English | Calls `get_order_details`, reports Out for Delivery. | ✅ PASS |
-| 2 | *"I received ORD-102 two weeks ago, can I return it?"* | English | Detects `return_eligible: false`, explains 7-day policy. | ✅ PASS |
-| 3 | **"I want to return it"** | English | No tool call. Asks for order ID only. | ✅ PASS |
-| 4 | **"cancel my order"** | English | No tool call. Asks for order ID only. | ✅ PASS |
-| 5a | *"I want to cancel ORD-103"* | English | Asks confirmation before cancellation. | ✅ PASS |
-| 5b | *"Yes, please go ahead"* (follow-up) | English | Calls `cancel_order`, confirms cancellation. | ✅ PASS |
-| 6 | **"Mera order ORD-101 kahan hai?"** | **Hinglish** | Calls `get_order_details`, replies in Roman Hinglish. | ✅ PASS |
-| 7 | **"I want to talk to a human, my serum arrived shattered!"** | English | Calls `create_support_ticket(HIGH)`, returns TKT-1001, 24h SLA, no refund promise. | ✅ PASS |
-| 8 | Post-call summary `/api/summary` | — | Returns `language`, `tickets_created: ["TKT-1001"]`, `escalation: true`. | ✅ PASS |
-
----
-
-## 7. Known Limitations
-
-1. **Browser Support**: Web Speech API works natively in Chromium browsers (Chrome, Edge, Brave) only. Firefox shows a clear banner and falls back to text input.
-2. **Headphones Recommended**: Half-duplex mode prevents mic pickup of Aria's speech; headphones give the best experience.
-3. **Free-Tier TTS Quota**: Gemini TTS Preview has a 3 req/min free-tier limit. The app transparently falls back to browser `SpeechSynthesis`. A server-side audio cache eliminates duplicate requests for greetings and common phrases.
-4. **In-Memory Data**: Orders and support tickets reset on server restart. Production would use a real OMS/CRM.
-
----
-
-## 8. Design Decisions
-
-### Why Aria asks for language first
-The Web Speech API uses a single `lang` attribute at start-of-recognition. Choosing the wrong language (`en-IN` for a Hindi speaker or `hi-IN` for an English speaker) causes the recogniser to mishear words, mangle proper nouns, and fail to recognise order IDs like `ORD-101`. Asking for language preference before any domain query ensures the recogniser is tuned correctly from the first real utterance. The greeting is pre-synthesised and cached, so there is zero added latency. Explicit selection also gives the customer agency and signals the product is genuinely built for India.
-
-### Why ambiguous requests get a clarifying question instead of a guess
-A voice agent that guesses intent and calls the wrong tool creates errors that cannot be undone (e.g. cancelling the wrong order). Asking exactly one clarifying question costs at most one extra turn but eliminates an entire class of policy violations. The rule "never more than one question per reply" prevents interrogating the customer and keeps the conversation natural.
-
-### Why `create_support_ticket` never promises an outcome
-Support tickets route to human agents who investigate physical damage, courier issues, and exceptions. The agent cannot unilaterally authorise refunds or replacements. Promising an outcome the system cannot guarantee erodes customer trust. The ticket ID and a firm 24-hour SLA satisfy the customer while keeping expectations accurate.
-
-### Why tickets appear as chips in the transcript
-Tool calls are invisible in a voice conversation. Showing a visible chip (*"Created Support Ticket: TKT-1001"*) gives the customer evidence that something real happened, reduces anxiety, and makes the post-call summary easier to audit. It also helps QA reviewers immediately spot escalations when scanning transcripts.
-
-### Why multi-brand support was intentionally skipped
-Supporting multiple brands would require per-brand system prompts, per-brand order schemas, and per-brand policy rules injected at runtime. This introduces context bloat (longer prompts mean higher latency and cost), risks cross-brand prompt contamination, and complicates the data model. For this assignment the goal is a reliable, low-latency single-brand experience. Multi-tenancy would be the correct next step for production — implemented via a brand configuration table and prompt template interpolation — but it adds no value to the evaluation and would introduce fragility.
-
-### Why TTS style instructions were removed
-Early builds prepended a delivery instruction to each TTS request (e.g. *"Say in a confident, calm voice: ..."*). Gemini TTS Preview occasionally spoke the instruction aloud. Confident delivery is achieved more reliably through: a well-chosen prebuilt voice (`Kore`), prompt-level instructions asking for short declarative filler-free sentences, and sentence-level audio chunking that gives TTS natural intonation boundaries.
-
-### Why Hinglish replies use Roman script, not Devanagari
-Indian consumers writing or speaking casual Hinglish overwhelmingly use Roman script (WhatsApp, SMS, social media). Devanagari output requires a dedicated Hindi TTS voice to sound correct; Roman Hinglish is readable and pronounceable by any `en-IN` voice engine. It also keeps the transcript readable for QA reviewers who may not read Devanagari.
-
----
-
-## 9. Architecture Q&A
-
-### a) Why this stack?
-Next.js App Router + browser Web Speech API + server-side Gemini function calling achieves the lowest possible round-trip latency without heavy audio-streaming infrastructure. Browser STT and TTS eliminate the 300–800ms transit delay of streaming raw PCM over WebSockets to an external speech server. The Next.js API route acts as a secure stateless gateway that holds the API key, runs the tool-calling loop, and returns clean speakable text.
-
-### b) What was the hardest part?
-**Half-duplex turn-taking + spoken ID normalisation + echo suppression.** When Aria speaks through laptop speakers, the mic picks up her voice and creates a feedback loop. Implementing half-duplex (abort recognition while speaking, restart after TTS `onend` + 500ms) solved this. Spoken order IDs (*"o r d one zero one"*) required a phonetic digit-normaliser mapping number words to digits before reconstructing canonical `ORD-XXX`. All policy flags are computed server-side to avoid LLM date-arithmetic hallucinations.
-
-### c) If you had one more week?
-Upgrade from browser Web Speech API to **bidirectional audio streaming** via WebSockets using Gemini Live (multimodal audio-to-audio) or Deepgram Nova-2 + ElevenLabs Indic voice models. This would give sub-100ms STT latency, natural Indian English prosody, and true full-duplex barge-in with hardware-level acoustic echo cancellation via WebRTC. I would also add a CI/CD evaluation harness (promptfoo + synthetic audio) to regression-test policy edge cases.
-
-### d) At 1,000 calls/day?
-- Replace the in-memory mock DB with a real OMS API (Shopify / Shiprocket) + Redis cache for sub-20ms order lookups.
-- Add SMS/WhatsApp OTP verification before allowing cancellations.
-- Rate-limit per session with Redis token buckets; cascade to Anthropic Claude as a fallback LLM.
-- Add OpenTelemetry + Langfuse for latency percentiles (P95/P99), sentiment trends, PII redaction, and human-agent escalation triggers.
-
----
-
-## 10. License
-
-MIT © Aura Skincare. Built for hiring evaluation assignment.
+I used AI coding tools (Antigravity with Gemini, and Claude for planning and debugging) as the assignment encourages. I tested the app myself, and I can walk through any part of it: how the voice pipeline works, how a tool call happens, and where the guardrails are.
