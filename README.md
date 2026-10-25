@@ -3,7 +3,7 @@
 I built Aria for the Datastraw AI assessment. She is a browser-based voice agent for a fictional Indian skincare brand, Aura Skincare. You click Start Call, talk to her, and she answers out loud. She can look up orders, cancel eligible ones, raise a support ticket, and she sticks to the brand's policies.
 
 - **Live app**: https://aria-aura-skincare-voice-agent.vercel.app/
-- **Demo video**: [paste video link]
+- **Demo video**: https://youtu.be/gmwi2inE9lI
 - **Repo**: https://github.com/MOHITDADHICH29/Aria-Aura-Skincare-Voice-Agent
 
 Use Chrome or Edge, allow the microphone, and click **Start Call**. The page has a Test Orders panel with the three sample orders and a list of sentences you can try.
